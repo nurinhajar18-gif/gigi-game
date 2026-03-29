@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Healthy Teeth Tilt Game</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            background-color: #f0f9ff;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        #game-container {
+            max-width: 800px;
+            margin: auto;
+            padding: 20px;
+        }
+
+        /* The Video Feed (Mirrored for natural movement) */
+        #video-wrapper {
+            position: relative;
+            width: 320px;
+            height: 240px;
+            margin: 10px auto;
+            border: 5px solid #333;
+            border-radius: 15px;
+            overflow: hidden;
+            transform: scaleX(-1); /* Mirror effect */
+        }
+
+        video { width: 100%; height: 100%; object-fit: cover; }
+
+        /* Game UI */
+        #food-display { font-size: 80px; margin: 20px; }
+        #food-name { font-size: 32px; font-weight: bold; color: #2c3e50; }
+        
+        #instruction {
+            display: flex;
+            justify-content: space-around;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        .left-box { color: green; }
+        .right-box { color: red; }
+
+        #feedback {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 48px;
+            padding: 20px;
+            border-radius: 20px;
+            display: none;
+            z-index: 10;
+        }
+
+        .correct { background-color: #d4edda; color: #155724; border: 4px solid #c3e6cb; }
+        .wrong { background-color: #f8d7da; color: #721c24; border: 4px solid #f5c6cb; }
+
+        #explanation {
+            font-size: 20px;
+            margin-top: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 10px;
+            min-height: 50px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <h1>🦷 Healthy Teeth Game</h1>
+    <p>Tilt your head to answer!</p>
+
+    <div id="video-wrapper">
+        <video id="webcam" autoplay playsinline></video>
+    </div>
+
+    <div id="instruction">
+        <div class="left-box">⬅️ LEFT<br>Good</div>
+        <div class="right-box">RIGHT ➡️<br>Bad</div>
+    </div>
+
+    <div id="food-display">🍎</div>
+    <div id="food-name">Apple</div>
+    
+    <div id="explanation">Loading AI face detection... Please wait.</div>
+</div>
+
+<div id="feedback"></div>
+
+<script type="module">
+    // --- Game Data ---
+    const foodList = [
+        { name: "Apple", emoji: "🍎", good: true, info: "Apples are crunchy and clean your teeth!" },
+        { name: "Candy", emoji: "🍭", good: false, info: "Sugar stays on teeth and causes cavities." },
+        { name: "Milk", emoji: "🥛", good: true, info: "Milk has calcium to make teeth strong." },
+        { name: "Soda", emoji: "🥤", good: false, info: "Soda has acid that hurts your tooth enamel." },
+        { name: "Cheese", emoji: "🧀", good: true, info: "Cheese helps protect your teeth from acid." },
+        { name: "Carrot", emoji: "🥕", good: true, info: "Carrots are full of fiber and good for gums." }
+    ];
+
+    let currentFoodIndex = 0;
+    let canAnswer = false;
+
+    // --- MediaPipe Setup ---
+    import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js";
+
+    let faceLandmarker;
+    let video = document.getElementById("webcam");
+
+    async function setupAI() {
+        const filesetResolver = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm");
+        faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+            baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task` },
+            runningMode: "VIDEO",
+            numFaces: 1
+        });
+        startCamera();
+    }
+
+    function startCamera() {
+        navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
+            video.srcObject = stream;
+            video.addEventListener("loadeddata", predictWebcam);
+            document.getElementById("explanation").innerText = "Ready! Tilt your head to start.";
+            canAnswer = true;
+        });
+    }
+
+    // --- Detection Logic ---
+    async function predictWebcam() {
+        if (faceLandmarker) {
+            const startTimeMs = performance.now();
+            const results = faceLandmarker.detectForVideo(video, startTimeMs);
+
+            if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+                const landmarks = results.faceLandmarks[0];
+                
+                // Point 10 (Top of forehead) and Point 152 (Chin)
+                const top = landmarks[10];
+                const bottom = landmarks[152];
+
+                // Calculate horizontal difference between top and bottom
+                const tilt = top.x - bottom.x;
+
+                // Thresholds: Because video is mirrored, top.x > bottom.x is a tilt to the player's LEFT
+                if (canAnswer) {
+                    if (tilt > 0.08) { // Tilt Left
+                        checkAnswer(true);
+                    } else if (tilt < -0.08) { // Tilt Right
+                        checkAnswer(false);
+                    }
+                }
+            }
+        }
+        window.requestAnimationFrame(predictWebcam);
+    }
+
+    // --- Game Logic ---
+    function checkAnswer(isGood) {
+        canAnswer = false; // Stop listening for tilts temporarily
+        const food = foodList[currentFoodIndex];
+        const feedbackDiv = document.getElementById("feedback");
+        
+        const isCorrect = (isGood === food.good);
+
+        // Show Visual Feedback
+        feedbackDiv.style.display = "block";
+        feedbackDiv.innerText = isCorrect ? "✅ Correct!" : "❌ Try Again!";
+        feedbackDiv.className = isCorrect ? "correct" : "wrong";
+
+        document.getElementById("explanation").innerText = food.info;
+
+        // Move to next food after 3 seconds
+        setTimeout(() => {
+            feedbackDiv.style.display = "none";
+            currentFoodIndex = (currentFoodIndex + 1) % foodList.length;
+            updateUI();
+            canAnswer = true;
+        }, 3000);
+    }
+
+    function updateUI() {
+        const food = foodList[currentFoodIndex];
+        document.getElementById("food-display").innerText = food.emoji;
+        document.getElementById("food-name").innerText = food.name;
+    }
+
+    setupAI();
+</script>
+
+</body>
+</html>
